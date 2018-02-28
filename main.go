@@ -1,75 +1,123 @@
 package main
 
 import (
-	"flag"
-	"fmt"
+	"encoding/json"
 	"log"
-	"net/url"
 	"os"
+	"runtime"
+	"time"
 
-	"github.com/FiloSottile/Heartbleed/heartbleed"
+	"github.com/chrisDeFouRire/Heartbleed/heartbleed"
+	nats "github.com/nats-io/go-nats"
 )
 
-var usageMessage = `This is a tool for detecting OpenSSL Heartbleed vulnerability (CVE-2014-0160).
-
-Usage:  %s [flags] server_name[:port]
-
-The default port is 443 (HTTPS).
-If a URL is supplied in server_name, it will be parsed to extract the host, but not the protocol.
-
-The following flags are recognized:
-`
-
-func usage() {
-	fmt.Fprintf(os.Stderr, usageMessage, os.Args[0])
-	flag.PrintDefaults()
-	os.Exit(2)
+type request struct {
+	Hostname string `json:"hostname"`
+	Host     string `json:"host"`
+	Port     int32  `json:"port"`
 }
 
-func main() {
-	var (
-		service = flag.String("service", "https", fmt.Sprintf(
-			`Specify a service name to test (using STARTTLS if necessary).
-		Besides HTTPS, currently supported services are:
-		%s`, heartbleed.Services))
-		check_cert = flag.Bool("check-cert", false, "check the server certificate")
-	)
-	flag.Parse()
+type response struct {
+	Hostname   string `json:"hostname"`
+	Host       string `json:"host"`
+	Port       int32  `json:"port"`
+	Vulnerable bool   `json:"vulnerable"`
+	Error      string `json:"error,omitifempty"`
+}
 
-	if flag.NArg() < 1 {
-		usage()
+func handleRequest(nc *nats.Conn, msg []byte, reply string) {
+	// don't let a panic crash the app or we'll crash all concurrent requests
+	defer func() {
+		if r := recover(); r != nil {
+			log.Println("Error recovered")
+		}
+	}()
+
+	req := request{}
+	jierr := json.Unmarshal(msg, &req)
+	if jierr != nil {
+		log.Println("JSON request unmarshal Error: ", jierr.Error())
 	}
 
 	tgt := &heartbleed.Target{
-		Service: *service,
-		HostIp:  flag.Arg(0),
+		Service:  "https",
+		HostIp:   req.Host,
+		Hostname: req.Hostname,
+		Port:     req.Port,
 	}
 
-	// Parse the host out of URLs
-	u, err := url.Parse(tgt.HostIp)
-	if err == nil && u.Host != "" {
-		tgt.HostIp = u.Host
-		if u.Scheme != "" {
-			tgt.Service = u.Scheme
-		}
+	_, err := heartbleed.Heartbleed(tgt,
+		[]byte("github.com/FiloSottile/Heartbleed"), true)
+
+	res := response{
+		Hostname: req.Hostname,
+		Host:     req.Host,
+		Port:     req.Port,
 	}
 
-	out, err := heartbleed.Heartbleed(tgt,
-		[]byte("github.com/FiloSottile/Heartbleed"), !(*check_cert))
 	if err == heartbleed.Safe {
-		log.Printf("%v - SAFE", tgt.HostIp)
-		os.Exit(0)
+		res.Vulnerable = false
+		log.Printf("%s (%s:%d): %#v\n", req.Hostname, req.Host, req.Port, res.Vulnerable)
 	} else if err != nil {
-		if err.Error() == "Please try again" {
-			log.Printf("%v - TRYAGAIN: %v", tgt.HostIp, err)
-			os.Exit(2)
-		} else {
-			log.Printf("%v - ERROR: %v", tgt.HostIp, err)
-			os.Exit(2)
-		}
+		log.Printf("ERROR: %s (%s:%d): %s\n", req.Hostname, req.Host, req.Port, res.Error)
+		res.Error = err.Error()
 	} else {
-		log.Printf("%v\n", out)
-		log.Printf("%v - VULNERABLE", tgt.HostIp)
-		os.Exit(1)
+		res.Vulnerable = true
+		log.Printf("%s (%s:%d): %#v\n", req.Hostname, req.Host, req.Port, res.Vulnerable)
 	}
+
+	bytes, joerr := json.Marshal(res)
+	if joerr != nil {
+		log.Println("JSON response marshal Error: ", jierr.Error())
+	}
+	nc.Publish(reply, bytes)
+
+}
+
+func main() {
+
+	log.SetFlags(log.LstdFlags | log.LUTC)
+
+	natsURL := os.Getenv("NATS_URL")
+	if natsURL == "" {
+		natsURL = "nats://127.0.0.1:4222"
+	}
+
+	natsChannel := os.Getenv("NATS_CHANNEL")
+	if natsChannel == "" {
+		natsChannel = "vuln.HEARTBLEED.*"
+	}
+
+	var nc *nats.Conn
+	var err error
+	nc, err = nats.Connect(
+		natsURL,
+		nats.MaxReconnects(-1),
+		nats.ReconnectWait(1*time.Second),
+		nats.DisconnectHandler(func(*nats.Conn) {
+			log.Println("Got disconnected from nats!")
+		}),
+		nats.ReconnectHandler(func(_ *nats.Conn) {
+			log.Printf("Got reconnected to %v!\n", nc.ConnectedUrl())
+		}),
+		nats.ClosedHandler(func(nc *nats.Conn) {
+			log.Printf("Connection closed. Reason: %q\n", nc.LastError())
+		}))
+	if err != nil {
+		log.Println("Error: Can't connect to nats")
+		log.Fatalln(err.Error())
+	}
+
+	log.Println("Connected to Nats")
+
+	// subscribe and spawn a goroutine for each message
+	_, err = nc.QueueSubscribe(natsChannel, "heartbleed_group", func(msg *nats.Msg) {
+		go handleRequest(nc, msg.Data, msg.Reply)
+	})
+
+	if err != nil {
+		log.Println("Error: Can't subscribe to nats")
+		log.Fatalln(err.Error())
+	}
+	runtime.Goexit()
 }

