@@ -104,11 +104,11 @@ func main() {
 			log.Printf("Connection closed. Reason: %q\n", nc.LastError())
 		}))
 	if err != nil {
-		log.Println("Error: Can't connect to nats")
+		log.Println("Error: Can't connect to nats (", natsURL, ")")
 		log.Fatalln(err.Error())
 	}
 
-	log.Println("Connected to Nats")
+	log.Println("Connected to Nats (", natsURL, ")")
 
 	// subscribe and spawn a goroutine for each message
 	_, err = nc.QueueSubscribe(natsChannel, "heartbleed_group", func(msg *nats.Msg) {
