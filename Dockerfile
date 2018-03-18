@@ -6,7 +6,7 @@ WORKDIR /go/src/github.com/chrisDeFouRire/Heartbleed
 COPY . .
 
 RUN go get github.com/nats-io/go-nats
-RUN CGO_ENABLED=0 GOOS=linux go build -a -installsuffix cgo -o main ./main.go
+RUN CGO_ENABLED=0 GOOS=linux go build -a -installsuffix cgo -o heartbleed ./main.go
 
 # use a minimal alpine image
 FROM alpine:3.7
@@ -15,6 +15,6 @@ RUN apk update && apk add ca-certificates && rm -rf /var/cache/apk/*
 # set working directory
 WORKDIR /root
 # copy the binary from builder
-COPY --from=builder /go/src/github.com/chrisDeFouRire/Heartbleed/main .
+COPY --from=builder /go/src/github.com/chrisDeFouRire/Heartbleed/heartbleed .
 # run the binary
-CMD ["./main"]
+CMD ["./heartbleed"]
