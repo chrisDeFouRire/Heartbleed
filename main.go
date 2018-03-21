@@ -36,7 +36,7 @@ func handleRequest(nc *nats.Conn, msg []byte, reply string) {
 	req := request{}
 	jierr := json.Unmarshal(msg, &req)
 	if jierr != nil {
-		log.Println("JSON request unmarshal Error: ", jierr.Error())
+		log.Println("JSON request unmarshal: ", jierr.Error())
 	}
 
 	tgt := &heartbleed.Target{
@@ -57,9 +57,7 @@ func handleRequest(nc *nats.Conn, msg []byte, reply string) {
 
 	if err == heartbleed.Safe {
 		res.Vulnerable = false
-		log.Printf("%s (%s:%d): %#v\n", req.Hostname, req.Host, req.Port, res.Vulnerable)
 	} else if err != nil {
-		log.Printf("ERROR: %s (%s:%d): %s\n", req.Hostname, req.Host, req.Port, res.Error)
 		res.Error = err.Error()
 	} else {
 		res.Vulnerable = true
@@ -69,8 +67,12 @@ func handleRequest(nc *nats.Conn, msg []byte, reply string) {
 	bytes, joerr := json.Marshal(res)
 	if joerr != nil {
 		log.Println("JSON response marshal Error: ", jierr.Error())
+		return
 	}
-	nc.Publish(reply, bytes)
+	err = nc.Publish(reply, bytes)
+	if err != nil {
+		log.Println("pub: ", err)
+	}
 
 }
 
