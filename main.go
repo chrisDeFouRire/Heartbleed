@@ -61,8 +61,8 @@ func handleRequest(nc *nats.Conn, msg []byte, reply string) {
 		res.Error = err.Error()
 	} else {
 		res.Vulnerable = true
-		log.Printf("%s (%s:%d): %#v\n", req.Hostname, req.Host, req.Port, res.Vulnerable)
 	}
+	log.Printf("%s (%s:%d): %#v\n", req.Hostname, req.Host, req.Port, res.Vulnerable)
 
 	bytes, joerr := json.Marshal(res)
 	if joerr != nil {
